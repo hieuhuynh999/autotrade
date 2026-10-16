@@ -45,7 +45,7 @@ def test_storage_and_paper_cycle_wait_for_the_next_closed_bar(tmp_path):
     settings = _settings(db)
     now = candles[-1].close_time + 1
     first = run_paper_once(settings, store, now)
-    assert "vào long theo momentum" in first
+    assert "vào long khi phá đỉnh/đáy" in first
     second = run_paper_once(settings, store, now)
     assert "đã xử lý nến này" in second
     store.close()

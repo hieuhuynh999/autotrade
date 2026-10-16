@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from local_trader.day_guard import apply_day_guards, entries_allowed, reset_day_guards, start_new_session
 from local_trader.models import (
     BacktestResult,
     BotState,
@@ -10,7 +11,7 @@ from local_trader.models import (
     Trade,
 )
 from local_trader.risk import daily_loss_hit, position_quantity, stop_fill_price, stop_price
-from local_trader.strategy import entry_side, exit_needed, momentum
+from local_trader.strategy import channel_exit, evaluate_entry, momentum
 
 
 def utc_day(time_ms: int) -> str:
@@ -109,6 +110,7 @@ def _roll_day(state: BotState, time_ms: int, equity_now: float) -> None:
     state.day_start_equity = equity_now
     state.halted = False
     state.halt_reason = None
+    reset_day_guards(state)
 
 
 def _mark_halt(state: BotState, equity_now: float, daily_loss_pct: float) -> None:
@@ -151,14 +153,14 @@ def process_bar(
                 apply_exit(state, stop_fill, bar.close_time, fee_rate, "cắt lỗ cứng", mom)
             )
             exited = True
-        elif exit_needed(state.position.side, mom, exit_threshold):
+        elif channel_exit(history, state.position.side, lookback):
             fills.append(
                 apply_exit(
                     state,
                     bar.close,
                     bar.close_time,
                     fee_rate,
-                    "thoát vì momentum gãy",
+                    "thoát vì phá biên ngược của 24 nến",
                     mom,
                 )
             )
@@ -178,8 +180,31 @@ def process_bar(
         )
         exited = True
 
-    if state.position is None and not state.halted and not exited:
-        side = entry_side(mom, funding, entry_threshold, max_abs_funding)
+    logs, take_profit = apply_day_guards(state, equity_at(state, bar.close), bar.close_time)
+    if take_profit and state.position is not None:
+        fills.append(
+            apply_exit(
+                state,
+                bar.close,
+                bar.close_time,
+                fee_rate,
+                "chốt lãi vì lãi ngày đạt 50 USD",
+                mom,
+            )
+        )
+        exited = True
+    if take_profit:
+        start_new_session(state, equity_at(state, bar.close))
+    state.logs = logs
+
+    if state.position is None and entries_allowed(state, bar.close_time) and not exited:
+        side, _reason, _lines = evaluate_entry(
+            history,
+            funding,
+            lookback=lookback,
+            entry_threshold=entry_threshold,
+            max_abs_funding=max_abs_funding,
+        )
         if side is not None:
             qty = position_quantity(
                 equity_at(state, bar.close),
@@ -199,7 +224,7 @@ def process_bar(
                         bar.close_time,
                         raw_stop,
                         fee_rate,
-                        f"vào {side} theo momentum",
+                        f"vào {side} khi phá đỉnh/đáy {lookback} nến",
                         mom,
                     )
                 )

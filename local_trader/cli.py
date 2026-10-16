@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(
         prog="local_trader",
-        description="Bot momentum 1 giờ, lưu dữ liệu local, chỉ nối Binance Futures Demo.",
+        description="Bot phá đỉnh/đáy 15 phút, lưu dữ liệu local, chỉ nối Binance Futures Demo.",
     )
     parser.add_argument("--env", default=".env", help="đường dẫn file env")
     sub = parser.add_subparsers(dest="command", required=True)

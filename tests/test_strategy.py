@@ -5,6 +5,7 @@ from local_trader.strategy import (
     closed_candles,
     entry_block_reason,
     entry_side,
+    evaluate_entry,
     exit_needed,
     momentum,
 )
@@ -43,6 +44,37 @@ def test_extreme_funding_blocks_the_side_that_pays():
 def test_missing_funding_blocks_entry():
     assert entry_side(0.05, None, 0.015, 0.0003) is None
     assert "chưa có funding" in entry_block_reason(0.05, None, 0.015, 0.0003)
+
+
+def test_all_four_factors_required_for_a_long():
+    closes = []
+    price = 100.0
+    for _ in range(80):
+        price += 0.4
+        closes.append(price)
+    for _ in range(6):
+        price *= 0.97
+        closes.append(price)
+    blocked = _series(closes + [price * 1.2])
+    side, reason, _lines = evaluate_entry(
+        blocked, 0.0001, lookback=24, entry_threshold=0.015, max_abs_funding=0.0003
+    )
+    assert side is None
+    assert "phá đỉnh" in reason
+    opened = _series(closes + [price * 1.35])
+    side, reason, _lines = evaluate_entry(
+        opened, 0.0001, lookback=24, entry_threshold=0.015, max_abs_funding=0.0003
+    )
+    assert side == "long"
+    assert reason == ""
+
+
+def _series(closes: list[float]) -> list[Candle]:
+    candles = []
+    for index, close in enumerate(closes):
+        open_time = index * 3_600_000
+        candles.append(Candle(open_time, close, close, close, close, 1.0, open_time + 3_599_999))
+    return candles
 
 
 def test_exit_when_momentum_breaks():

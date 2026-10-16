@@ -1,6 +1,6 @@
 # Kiểm thử local-trader
 
-Tool này kiểm tra một luật momentum khung 1 giờ sau phí. Nó không dự báo lãi. Phần lớn lệnh dưới đây chạy trên máy bạn. Chỉ mục demo mới gửi lệnh, và chỉ gửi lên Binance Futures Demo.
+Tool này kiểm tra luật phá đỉnh/đáy trên nến 15 phút sau phí. Nó không dự báo lãi. Phần lớn lệnh dưới đây chạy trên máy bạn. Chỉ mục demo mới gửi lệnh, và chỉ gửi lên Binance Futures Demo.
 
 Funding là phí của hợp đồng vĩnh cửu, nên sàn để test là Futures Demo, không phải Spot.
 
@@ -24,13 +24,15 @@ Nếu `py` không chạy, thay bằng `python`. File `.env` mặc định là `M
 pytest -q
 ```
 
-Kỳ vọng: dòng cuối là `18 passed`. Bộ này kiểm tra:
+Kỳ vọng: dòng cuối là `24 passed`. Bộ này kiểm tra:
 
 - nến đang chạy bị loại, tín hiệu chỉ tính trên nến đã đóng
-- momentum 24 nến, vào long/short, chặn khi funding quá lệch
+- phá đỉnh hoặc phá đáy 24 nến, chặn khi funding ngược chiều
 - chỉ một vị thế, không nhồi thêm lệnh
 - cắt lỗ cứng, và không đảo chiều ngay trên cùng nến đó
 - lỗ trong ngày vượt ngưỡng thì dừng mở lệnh mới
+- lãi ngày đạt 50 USD thì chốt vị thế, tính ngày mới từ lúc đó và được vào lệnh ở nến sau
+- lỗ ngày đạt 40 USD thì nghỉ mở lệnh mới 4 giờ, rồi được vào lại
 - sang ngày UTC mới thì được phép chạy lại
 - vòng khứ hồi có trừ phí
 - dữ liệu ghi SQLite không bị nhân đôi
@@ -48,15 +50,17 @@ python -m local_trader sync
 python -m local_trader status
 ```
 
-Kỳ vọng của `sync`: một dòng kiểu `đã lưu 2160 nến 1h và ... điểm funding cho BTCUSDT`. Khoảng 2160 nến là 90 ngày. Số funding phải lớn hơn 0. Nến giờ hiện tại vẫn được lưu, nhưng backtest và tín hiệu bỏ nến đó cho đến khi nó đóng, nên số nến trong backtest thường nhỏ hơn số vừa lưu đúng 1.
+Kỳ vọng của `sync`: một dòng kiểu `đã lưu ... nến 15m và ... điểm funding cho BTCUSDT`. Khoảng 8.640 nến là 90 ngày. Số funding phải lớn hơn 0. Nến 15 phút hiện tại vẫn được lưu, nhưng backtest và tín hiệu bỏ nến đó cho đến khi nó đóng.
 
 `status` in ngưỡng:
 
-- vào lệnh khi momentum 24 giờ đạt 1,50%
-- thoát khi momentum về 0%
+- vào lệnh khi đóng cửa phá đỉnh hoặc phá đáy 24 nến 15 phút, và funding không ngược chiều
+- thoát long khi đóng cửa thủng đáy 24 nến, thoát short khi đóng cửa vượt đỉnh 24 nến
 - khối lượng 10% vốn
 - cắt lỗ 2%
 - dừng bot khi lỗ trong ngày đạt 3%
+- chốt lãi khi lãi ngày đạt 50 USD, rồi tính lại từ lúc chốt
+- lỗ ngày 40 USD thì nghỉ mở lệnh 4 giờ
 
 File dữ liệu nằm ở `data\trader.db`.
 
@@ -66,13 +70,13 @@ File dữ liệu nằm ở `data\trader.db`.
 python -m local_trader signal
 ```
 
-Kỳ vọng: giá nến 1 giờ đã đóng, momentum theo %, funding theo %, và một trong các câu:
+Kỳ vọng: dòng phá đỉnh/đáy, dòng funding, rồi một trong các câu:
 
 - `tín hiệu vào lệnh: long`
 - `tín hiệu vào lệnh: short`
 - `tín hiệu vào lệnh: không — ...`
 
-Câu cuối phải là `Quyết định này chỉ dùng nến đã đóng.`
+Câu cuối phải nói lệnh mới khi đóng cửa phá đỉnh hoặc phá đáy 24 nến 15 phút, và chỉ dùng nến đã đóng.
 
 ## 5. Backtest trên dữ liệu vừa kéo
 
@@ -86,7 +90,7 @@ Kỳ vọng: vốn đầu 10000, vốn cuối, số lệnh, số thắng, tổng
 
 - tổng phí lớn so với lãi thì luật đang vào ra quá dày
 - drawdown là mức vốn tụt sâu nhất so với đỉnh trong mẫu
-- lý do lệnh thường là `cắt lỗ cứng`, `thoát vì momentum gãy`, hoặc `đóng cuối kỳ backtest`
+- lý do lệnh thường là `cắt lỗ cứng`, `thoát vì phá biên ngược của 24 nến`, hoặc `đóng cuối kỳ backtest`
 
 Backtest không đụng tài khoản paper và không gửi lệnh.
 
@@ -98,20 +102,20 @@ python -m local_trader status
 python -m local_trader once
 ```
 
-Lần `once` đầu xử lý nến 1 giờ đã đóng gần nhất.
+Lần `once` đầu xử lý nến 15 phút đã đóng gần nhất.
 
-- Nếu đủ điều kiện: dòng `vào long theo momentum` hoặc `vào short theo momentum`, có khối lượng, giá, phí. `status` cho thấy đúng một vị thế và giá cắt lỗ.
-- Nếu chưa đủ: một lý do, ví dụ momentum chưa chạm ngưỡng, hoặc funding quá cao. `status` vẫn là `không có vị thế`.
+- Nếu đủ điều kiện: dòng `vào long khi phá đỉnh/đáy` hoặc `vào short khi phá đỉnh/đáy`, có khối lượng, giá, phí. `status` cho thấy đúng một vị thế và giá cắt lỗ.
+- Nếu chưa đủ: một lý do, ví dụ chưa phá đỉnh/đáy, hoặc funding ngược chiều. `status` vẫn là `không có vị thế`.
 
-Lần `once` thứ hai, cùng giờ, phải có `đã xử lý nến này, chờ nến 1 giờ đóng tiếp`. Bot không được vào thêm vị thế.
+Lần `once` thứ hai, cùng một nến 15 phút, phải có `đã xử lý nến này, chờ nến 15m đóng tiếp`. Bot không được vào thêm vị thế.
 
-Muốn xem vòng sau, đợi nến 1 giờ đóng (đầu giờ UTC) rồi chạy `once` lại. Hoặc để bot chờ hộ:
+Muốn xem vòng sau, đợi nến 15 phút đóng rồi chạy `once` lại. Hoặc để bot chờ hộ:
 
 ```powershell
 python -m local_trader run
 ```
 
-Dừng bằng `Ctrl+C`. Mỗi vòng paper chỉ hành động khi có nến 1 giờ mới.
+Dừng bằng `Ctrl+C`. Mỗi vòng paper chỉ hành động khi có nến 15 phút mới.
 
 Reset tài khoản giả lập, không xóa nến đã lưu:
 

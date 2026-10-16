@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,10 @@ class BotState:
     halted: bool
     halt_reason: str | None
     last_bar_open_time: int | None
+    profit_day_done: bool = False
+    entries_blocked_until: int | None = None
+    loss_pause_latched: bool = False
+    logs: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

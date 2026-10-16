@@ -59,9 +59,9 @@ def load_settings(env_file: Path | None = None) -> Settings:
     symbol = os.environ.get("SYMBOL", "BTCUSDT").strip().upper()
     if not symbol.isalnum() or not (5 <= len(symbol) <= 20):
         raise ValueError("SYMBOL không hợp lệ")
-    interval = os.environ.get("INTERVAL", "1h").strip()
-    if interval != "1h":
-        raise ValueError("Bản này chỉ chạy INTERVAL=1h")
+    interval = os.environ.get("INTERVAL", "15m").strip()
+    if interval not in {"15m", "1h"}:
+        raise ValueError("INTERVAL chỉ nhận 15m hoặc 1h")
     lookback = _required_int("LOOKBACK", "24")
     entry_threshold = _required_float("ENTRY_THRESHOLD", "0.015")
     exit_threshold = _required_float("EXIT_THRESHOLD", "0")

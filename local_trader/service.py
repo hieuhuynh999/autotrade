@@ -3,6 +3,14 @@ from datetime import datetime, timezone
 
 from local_trader.binance_client import BinanceDemoClient, BinanceError
 from local_trader.config import Settings
+from local_trader.day_guard import (
+    activity_label,
+    apply_day_guards,
+    entries_allowed,
+    entry_block_text,
+    reset_day_guards,
+    start_new_session,
+)
 from local_trader.engine import equity_at, process_bar, utc_day
 from local_trader.models import BotState, Candle, Fill, Position
 from local_trader.risk import (
@@ -15,17 +23,17 @@ from local_trader.risk import (
 )
 from local_trader.storage import Store
 from local_trader.strategy import (
+    channel_exit,
     closed_candles,
-    entry_block_reason,
-    entry_side,
-    exit_needed,
+    evaluate_entry,
     momentum,
 )
 
 
 def sync_market(settings: Settings, store: Store, client: BinanceDemoClient, *, full: bool) -> str:
     if full:
-        candles, funding = client.download_history(settings.symbol, settings.interval)
+        target = 2160 if settings.interval == "1h" else 90 * 24 * 4
+        candles, funding = client.download_history(settings.symbol, settings.interval, candles_target=target)
     else:
         candles = client.klines(settings.symbol, settings.interval, limit=200)
         funding = client.funding_history(settings.symbol, limit=50)
@@ -41,27 +49,22 @@ def sync_market(settings: Settings, store: Store, client: BinanceDemoClient, *, 
 
 
 def describe_signal(settings: Settings, store: Store, now_ms: int) -> str:
-    closed, funding, mom = _context(settings, store, now_ms)
+    closed, funding, _mom = _context(settings, store, now_ms)
     if not closed:
         return "chưa có nến đã đóng. Chạy sync trước."
+    _side, _reason, factor_lines = evaluate_entry(
+        closed,
+        funding,
+        lookback=settings.lookback,
+        entry_threshold=settings.entry_threshold,
+        max_abs_funding=settings.max_abs_funding,
+    )
     lines = [
         f"symbol {settings.symbol}  khung {settings.interval}",
         f"nến đóng gần nhất { _fmt_time(closed[-1].close_time)}  giá {closed[-1].close:.4f}",
-        "momentum: chưa đủ nến" if mom is None else f"momentum {lookback_label(settings)}: {mom * 100:.2f}%",
-        "funding: chưa có" if funding is None else f"funding gần nhất: {funding * 100:.4f}%",
+        *factor_lines,
+        "Lệnh mới khi đóng cửa phá đỉnh hoặc phá đáy 24 nến 15 phút và funding không ngược chiều. Chỉ dùng nến đã đóng.",
     ]
-    block = entry_block_reason(
-        mom,
-        funding,
-        settings.entry_threshold,
-        settings.max_abs_funding,
-    )
-    side = entry_side(mom, funding, settings.entry_threshold, settings.max_abs_funding)
-    if side is None:
-        lines.append(f"tín hiệu vào lệnh: không — {block}")
-    else:
-        lines.append(f"tín hiệu vào lệnh: {side}")
-    lines.append("Quyết định này chỉ dùng nến đã đóng.")
     return "\n".join(lines)
 
 
@@ -76,7 +79,13 @@ def run_paper_once(settings: Settings, store: Store, now_ms: int) -> str:
     state = store.load_paper(settings.paper_cash, now_ms)
     pending = _pending_bars(closed, state.last_bar_open_time)
     if not pending:
-        return _status_line(settings, state, equity_at(state, closed[-1].close), "đã xử lý nến này, chờ nến 1 giờ đóng tiếp")
+        return _status_line(
+            settings,
+            state,
+            equity_at(state, closed[-1].close),
+            f"đã xử lý nến này, chờ nến {settings.interval} đóng tiếp",
+            now_ms,
+        )
     messages: list[str] = []
     for bar in pending:
         history = [candle for candle in closed if candle.open_time <= bar.open_time]
@@ -97,20 +106,28 @@ def run_paper_once(settings: Settings, store: Store, now_ms: int) -> str:
                 momentum=fill.momentum,
                 equity=equity_at(state, fill.price),
             )
-        if not fills and state.position is None and not state.halted:
-            mom = momentum([candle.close for candle in history], settings.lookback)
-            reason = entry_block_reason(
-                mom, funding, settings.entry_threshold, settings.max_abs_funding
+        _record_guard_logs(store, messages, state.logs, "paper", settings.symbol, bar.close_time, equity_at(state, bar.close))
+        if not fills and state.position is None and entries_allowed(state, bar.close_time):
+            _side, reason, _lines = evaluate_entry(
+                history,
+                funding,
+                lookback=settings.lookback,
+                entry_threshold=settings.entry_threshold,
+                max_abs_funding=settings.max_abs_funding,
             )
             if reason:
                 messages.append(f"nến {_fmt_time(bar.close_time)}: {reason}")
-            elif entry_side(mom, funding, settings.entry_threshold, settings.max_abs_funding):
+            else:
                 messages.append(
                     f"nến {_fmt_time(bar.close_time)}: khối lượng nhỏ hơn mức tối thiểu của sàn"
                 )
+        elif not fills and state.position is None:
+            block = entry_block_text(state, bar.close_time)
+            if block and block not in state.logs:
+                messages.append(f"nến {_fmt_time(bar.close_time)}: {block}")
     store.save_paper(state)
     equity = equity_at(state, closed[-1].close)
-    messages.append(_status_line(settings, state, equity, "paper"))
+    messages.append(_status_line(settings, state, equity, "paper", now_ms))
     return "\n".join(messages)
 
 
@@ -160,7 +177,7 @@ def run_demo_once(settings: Settings, store: Store, client: BinanceDemoClient, n
     if state.position is not None and mark_hits_stop(state.position.side, state.position.stop_price, mark):
         fill_price = _close_demo(settings, store, client, state, filters, "cắt lỗ cứng", now_ms)
         messages.append(f"cắt lỗ cứng tại {fill_price:.4f}")
-        equity = equity_at(state, fill_price)
+        equity = float(client.account()["totalMarginBalance"])
 
     if daily_loss_hit(state.day_start_equity, equity, settings.daily_loss_pct):
         state.halted = True
@@ -176,18 +193,28 @@ def run_demo_once(settings: Settings, store: Store, client: BinanceDemoClient, n
                 now_ms,
             )
             messages.append(f"đóng vì lỗ ngày tại {fill_price:.4f}")
+            equity = float(client.account()["totalMarginBalance"])
+
+    equity = _take_daily_profit(settings, store, client, state, filters, equity, now_ms, messages)
 
     latest = closed[-1]
     if state.last_bar_open_time != latest.open_time:
         history = closed
         mom = momentum([candle.close for candle in history], settings.lookback)
         funding = _funding_asof(store.funding(settings.symbol), latest.close_time)
-        if state.position is not None and exit_needed(state.position.side, mom, settings.exit_threshold):
-            fill_price = _close_demo(settings, store, client, state, filters, "thoát vì momentum gãy", now_ms)
-            messages.append(f"thoát vì momentum gãy tại {fill_price:.4f}")
-        if state.position is None and not state.halted:
-            side = entry_side(mom, funding, settings.entry_threshold, settings.max_abs_funding)
-            block = entry_block_reason(mom, funding, settings.entry_threshold, settings.max_abs_funding)
+        if state.position is not None and channel_exit(history, state.position.side, settings.lookback):
+            fill_price = _close_demo(settings, store, client, state, filters, "thoát vì phá biên ngược của 24 nến", now_ms)
+            messages.append(f"thoát vì phá biên ngược của 24 nến tại {fill_price:.4f}")
+            equity = float(client.account()["totalMarginBalance"])
+            equity = _take_daily_profit(settings, store, client, state, filters, equity, now_ms, messages)
+        if state.position is None and entries_allowed(state, now_ms):
+            side, block, _factor_lines = evaluate_entry(
+                history,
+                funding,
+                lookback=settings.lookback,
+                entry_threshold=settings.entry_threshold,
+                max_abs_funding=settings.max_abs_funding,
+            )
             if side is None:
                 messages.append(block or "không vào lệnh")
             else:
@@ -200,13 +227,17 @@ def run_demo_once(settings: Settings, store: Store, client: BinanceDemoClient, n
                 else:
                     opened = _open_demo(settings, store, client, state, filters, side, qty, mom, now_ms)
                     messages.append(opened)
+        elif state.position is None:
+            block = entry_block_text(state, now_ms)
+            if block and block not in state.logs:
+                messages.append(block)
         state.last_bar_open_time = latest.open_time
     else:
         messages.append("đã xử lý nến này, vẫn kiểm tra cắt lỗ theo mark price")
 
     equity = float(client.account()["totalMarginBalance"])
     store.save_demo_state(state, leverage_ready=leverage_ready)
-    messages.append(_status_line(settings, state, equity, "demo"))
+    messages.append(_status_line(settings, state, equity, "demo", now_ms))
     return "\n".join(messages)
 
 
@@ -244,7 +275,7 @@ def _open_demo(
         side=side,
         qty=qty,
         price=fill,
-        reason="vào lệnh demo theo momentum",
+        reason="vào lệnh demo khi phá đỉnh/đáy 24 nến",
         momentum=mom,
         equity=None,
     )
@@ -299,6 +330,56 @@ def _close_demo(
     return fill
 
 
+def _take_daily_profit(
+    settings: Settings,
+    store: Store,
+    client: BinanceDemoClient,
+    state: BotState,
+    filters,
+    equity: float,
+    now_ms: int,
+    messages: list[str],
+) -> float:
+    _logs, take_profit = apply_day_guards(state, equity, now_ms)
+    _record_guard_logs(store, messages, state.logs, "demo", settings.symbol, now_ms, equity)
+    if take_profit and state.position is not None:
+        fill_price = _close_demo(
+            settings,
+            store,
+            client,
+            state,
+            filters,
+            "chốt lãi vì lãi ngày đạt 50 USD",
+            now_ms,
+        )
+        messages.append(f"chốt lãi ngày tại {fill_price:.4f}")
+        equity = float(client.account()["totalMarginBalance"])
+    if take_profit:
+        start_new_session(state, equity)
+    return equity
+
+
+def _record_guard_logs(
+    store: Store,
+    messages: list[str],
+    logs: list[str],
+    mode: str,
+    symbol: str,
+    ts: int,
+    equity: float,
+) -> None:
+    for line in logs:
+        messages.append(line)
+        store.add_event(
+            ts=ts,
+            mode=mode,
+            kind="warning",
+            symbol=symbol,
+            reason=line,
+            equity=equity,
+        )
+
+
 def _roll_demo_day(state: BotState, now_ms: int, equity: float) -> None:
     day = utc_day(now_ms)
     if state.day_key != day:
@@ -306,6 +387,7 @@ def _roll_demo_day(state: BotState, now_ms: int, equity: float) -> None:
         state.day_start_equity = equity
         state.halted = False
         state.halt_reason = None
+        reset_day_guards(state)
 
 
 def _position_from_account(account: dict, symbol: str) -> Position | None:
@@ -373,7 +455,7 @@ def _format_fill(fill: Fill) -> str:
     )
 
 
-def _status_line(settings: Settings, state: BotState, equity: float, note: str) -> str:
+def _status_line(settings: Settings, state: BotState, equity: float, note: str, now_ms: int) -> str:
     if state.position is None:
         position = "không có vị thế"
     else:
@@ -382,16 +464,12 @@ def _status_line(settings: Settings, state: BotState, equity: float, note: str) 
             f"giá vào {state.position.entry_price:.4f} "
             f"cắt lỗ {state.position.stop_price:.4f}"
         )
-    halt = "đang dừng mở lệnh mới" if state.halted else "đang chạy"
+    halt = activity_label(state, now_ms)
     day_pnl = equity - state.day_start_equity
     return (
         f"{note} | {settings.symbol} | vốn {equity:.4f} | ngày {state.day_key} "
         f"lãi/lỗ ngày {day_pnl:.4f} | {halt} | {position}"
     )
-
-
-def lookback_label(settings: Settings) -> str:
-    return f"{settings.lookback} nến {settings.interval}"
 
 
 def _fmt_time(time_ms: int) -> str:
@@ -404,13 +482,23 @@ def status_report(settings: Settings, store: Store, now_ms: int) -> str:
         f"mode {settings.mode} | {settings.symbol} | db {settings.db_path}",
         f"nến {candle_count} | funding {funding_count}",
         f"ngưỡng vào {settings.entry_threshold * 100:.2f}% / thoát {settings.exit_threshold * 100:.2f}%",
+        "vào lệnh khi đóng cửa phá đỉnh hoặc phá đáy 24 nến 15 phút và funding không ngược chiều",
         f"khối lượng {settings.position_pct * 100:.1f}% vốn | cắt lỗ {settings.stop_pct * 100:.1f}% | lỗ ngày {settings.daily_loss_pct * 100:.1f}%",
+        "chốt lãi 50 USD thì tính ngày mới từ lúc đó | lỗ ngày 40 USD thì nghỉ mở lệnh 4 giờ",
     ]
     if settings.mode == "paper" and candle_count:
         state = store.load_paper(settings.paper_cash, now_ms)
         closed = closed_candles(store.candles(settings.symbol, settings.interval), now_ms)
         price = closed[-1].close if closed else state.cash
-        lines.append(_status_line(settings, state, equity_at(state, price) if closed else state.cash, "paper"))
+        lines.append(
+            _status_line(
+                settings,
+                state,
+                equity_at(state, price) if closed else state.cash,
+                "paper",
+                now_ms,
+            )
+        )
     events = store.recent_events(5)
     if events:
         lines.append("sự kiện gần nhất:")
