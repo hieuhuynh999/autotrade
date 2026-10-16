@@ -27,6 +27,7 @@ def new_state(cash: float, time_ms: int) -> BotState:
         halted=False,
         halt_reason=None,
         last_bar_open_time=None,
+        session_started_ms=time_ms,
     )
 
 
@@ -110,6 +111,7 @@ def _roll_day(state: BotState, time_ms: int, equity_now: float) -> None:
     state.day_start_equity = equity_now
     state.halted = False
     state.halt_reason = None
+    state.session_started_ms = time_ms
     reset_day_guards(state)
 
 
@@ -194,7 +196,7 @@ def process_bar(
         )
         exited = True
     if take_profit:
-        start_new_session(state, equity_at(state, bar.close))
+        start_new_session(state, equity_at(state, bar.close), bar.close_time)
     state.logs = logs
 
     if state.position is None and entries_allowed(state, bar.close_time) and not exited:

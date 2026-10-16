@@ -55,7 +55,8 @@ class Store:
                 price REAL,
                 reason TEXT NOT NULL,
                 momentum REAL,
-                equity REAL
+                equity REAL,
+                pnl REAL
             );
             CREATE TABLE IF NOT EXISTS paper_account (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -72,7 +73,8 @@ class Store:
                 last_bar_open_time INTEGER,
                 profit_day_done INTEGER NOT NULL DEFAULT 0,
                 entries_blocked_until INTEGER,
-                loss_pause_latched INTEGER NOT NULL DEFAULT 0
+                loss_pause_latched INTEGER NOT NULL DEFAULT 0,
+                session_started_ms INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS demo_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -86,12 +88,14 @@ class Store:
                 leverage_ready INTEGER NOT NULL,
                 profit_day_done INTEGER NOT NULL DEFAULT 0,
                 entries_blocked_until INTEGER,
-                loss_pause_latched INTEGER NOT NULL DEFAULT 0
+                loss_pause_latched INTEGER NOT NULL DEFAULT 0,
+                session_started_ms INTEGER NOT NULL DEFAULT 0
             );
             """
         )
         self._ensure_guard_columns("paper_account")
         self._ensure_guard_columns("demo_state")
+        self._ensure_column("events", "pnl", "REAL")
         self._conn.commit()
 
     def _ensure_guard_columns(self, table: str) -> None:
@@ -102,10 +106,16 @@ class Store:
             "profit_day_done": "INTEGER NOT NULL DEFAULT 0",
             "entries_blocked_until": "INTEGER",
             "loss_pause_latched": "INTEGER NOT NULL DEFAULT 0",
+            "session_started_ms": "INTEGER NOT NULL DEFAULT 0",
         }
         for name, decl in columns.items():
             if name not in existing:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+    def _ensure_column(self, table: str, name: str, decl: str) -> None:
+        existing = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+        if existing and name not in existing:
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     def upsert_candles(self, symbol: str, interval: str, candles: list[Candle]) -> int:
         self._conn.executemany(
@@ -248,6 +258,7 @@ class Store:
             profit_day_done=bool(row["profit_day_done"]),
             entries_blocked_until=row["entries_blocked_until"],
             loss_pause_latched=bool(row["loss_pause_latched"]),
+            session_started_ms=int(row["session_started_ms"] or 0),
         )
 
     def save_paper(self, state: BotState) -> None:
@@ -257,8 +268,8 @@ class Store:
             INSERT INTO paper_account (
                 id, cash, side, qty, entry_price, stop_price, entry_time,
                 day_key, day_start_equity, halted, halt_reason, last_bar_open_time,
-                profit_day_done, entries_blocked_until, loss_pause_latched
-            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                profit_day_done, entries_blocked_until, loss_pause_latched, session_started_ms
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 cash = excluded.cash,
                 side = excluded.side,
@@ -273,7 +284,8 @@ class Store:
                 last_bar_open_time = excluded.last_bar_open_time,
                 profit_day_done = excluded.profit_day_done,
                 entries_blocked_until = excluded.entries_blocked_until,
-                loss_pause_latched = excluded.loss_pause_latched
+                loss_pause_latched = excluded.loss_pause_latched,
+                session_started_ms = excluded.session_started_ms
             """,
             (
                 state.cash,
@@ -290,6 +302,7 @@ class Store:
                 int(state.profit_day_done),
                 state.entries_blocked_until,
                 int(state.loss_pause_latched),
+                state.session_started_ms,
             ),
         )
         self._conn.commit()
@@ -317,6 +330,7 @@ class Store:
             profit_day_done=bool(row["profit_day_done"]),
             entries_blocked_until=row["entries_blocked_until"],
             loss_pause_latched=bool(row["loss_pause_latched"]),
+            session_started_ms=int(row["session_started_ms"] or 0),
         )
 
     def demo_extra(self) -> tuple[float | None, int | None, bool]:
@@ -339,8 +353,8 @@ class Store:
             INSERT INTO demo_state (
                 id, day_key, day_start_equity, halted, halt_reason,
                 last_bar_open_time, stop_price, entry_time, leverage_ready,
-                profit_day_done, entries_blocked_until, loss_pause_latched
-            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                profit_day_done, entries_blocked_until, loss_pause_latched, session_started_ms
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 day_key = excluded.day_key,
                 day_start_equity = excluded.day_start_equity,
@@ -352,7 +366,8 @@ class Store:
                 leverage_ready = excluded.leverage_ready,
                 profit_day_done = excluded.profit_day_done,
                 entries_blocked_until = excluded.entries_blocked_until,
-                loss_pause_latched = excluded.loss_pause_latched
+                loss_pause_latched = excluded.loss_pause_latched,
+                session_started_ms = excluded.session_started_ms
             """,
             (
                 state.day_key,
@@ -366,6 +381,7 @@ class Store:
                 int(state.profit_day_done),
                 state.entries_blocked_until,
                 int(state.loss_pause_latched),
+                state.session_started_ms,
             ),
         )
         self._conn.commit()
@@ -383,15 +399,28 @@ class Store:
         price: float | None = None,
         momentum: float | None = None,
         equity: float | None = None,
+        pnl: float | None = None,
     ) -> None:
         self._conn.execute(
             """
-            INSERT INTO events (ts, mode, kind, symbol, side, qty, price, reason, momentum, equity)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events (ts, mode, kind, symbol, side, qty, price, reason, momentum, equity, pnl)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (ts, mode, kind, symbol, side, qty, price, reason, momentum, equity),
+            (ts, mode, kind, symbol, side, qty, price, reason, momentum, equity, pnl),
         )
         self._conn.commit()
+
+    def session_exit_counts(self, mode: str, symbol: str, since_ms: int) -> tuple[int, int]:
+        rows = self._conn.execute(
+            """
+            SELECT pnl FROM events
+            WHERE mode = ? AND symbol = ? AND kind = 'exit' AND ts >= ? AND pnl IS NOT NULL
+            """,
+            (mode, symbol, since_ms),
+        ).fetchall()
+        wins = sum(1 for row in rows if row["pnl"] > 0)
+        losses = sum(1 for row in rows if row["pnl"] < 0)
+        return wins, losses
 
     def recent_events(self, limit: int = 10) -> list[sqlite3.Row]:
         return self._conn.execute(

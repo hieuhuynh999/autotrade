@@ -41,6 +41,7 @@ class BotState:
     profit_day_done: bool = False
     entries_blocked_until: int | None = None
     loss_pause_latched: bool = False
+    session_started_ms: int = 0
     logs: list[str] = field(default_factory=list)
 
 

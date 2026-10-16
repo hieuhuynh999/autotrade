@@ -12,6 +12,7 @@ from local_trader.service import (
     describe_signal,
     run_demo_once,
     run_paper_once,
+    session_log,
     status_report,
     sync_market,
 )
@@ -52,9 +53,15 @@ def main(argv: list[str] | None = None) -> int:
             print(_once(settings, store, client))
         elif args.command == "run":
             print(f"đang chạy {settings.mode}. Dừng bằng Ctrl+C. Host: {DEMO_BASE_URL}")
+            print("log lãi/lỗ in một lần mỗi 15 phút.")
+            last_session_log = 0
             while True:
                 try:
                     print(_once(settings, store, client))
+                    now = _now()
+                    if now - last_session_log >= 15 * 60 * 1000:
+                        print(session_log(settings, store, client, now))
+                        last_session_log = now
                     print("---")
                 except (BinanceError, requests.RequestException) as exc:
                     print(f"lỗi mạng hoặc sàn, sẽ thử lại: {exc}")

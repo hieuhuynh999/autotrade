@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from local_trader.models import BotState
 
 PROFIT_TARGET_USD = 50.0
-LOSS_PAUSE_USD = 40.0
+LOSS_PAUSE_USD = 20.0
 LOSS_PAUSE_MS = 4 * 60 * 60 * 1000
 
 TARGET_TEXT = "lãi ngày đạt 50 USD, chốt lãi và bắt đầu tính ngày mới từ lúc này"
-LOSS_TEXT = "cảnh báo: lỗ ngày đạt 40 USD. Tạm dừng mở lệnh 4 giờ."
+LOSS_TEXT = "cảnh báo: lỗ ngày đạt 20 USD. Tạm dừng mở lệnh 4 giờ."
 
 
 def reset_day_guards(state: BotState) -> None:
@@ -18,12 +18,14 @@ def reset_day_guards(state: BotState) -> None:
     state.logs = []
 
 
-def start_new_session(state: BotState, equity: float) -> None:
+def start_new_session(state: BotState, equity: float, now_ms: int | None = None) -> None:
     """Mốc lãi/lỗ ngày tính lại từ vốn ngay sau lúc chốt. Được vào lệnh tiếp."""
     state.day_start_equity = equity
     state.profit_day_done = False
     state.loss_pause_latched = False
     state.entries_blocked_until = None
+    if now_ms is not None:
+        state.session_started_ms = now_ms
 
 
 def entries_allowed(state: BotState, now_ms: int) -> bool:

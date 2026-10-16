@@ -24,7 +24,7 @@ Nếu `py` không chạy, thay bằng `python`. File `.env` mặc định là `M
 pytest -q
 ```
 
-Kỳ vọng: dòng cuối là `24 passed`. Bộ này kiểm tra:
+Kỳ vọng: dòng cuối là `25 passed`. Bộ này kiểm tra:
 
 - nến đang chạy bị loại, tín hiệu chỉ tính trên nến đã đóng
 - phá đỉnh hoặc phá đáy 24 nến, chặn khi funding ngược chiều
@@ -32,7 +32,7 @@ Kỳ vọng: dòng cuối là `24 passed`. Bộ này kiểm tra:
 - cắt lỗ cứng, và không đảo chiều ngay trên cùng nến đó
 - lỗ trong ngày vượt ngưỡng thì dừng mở lệnh mới
 - lãi ngày đạt 50 USD thì chốt vị thế, tính ngày mới từ lúc đó và được vào lệnh ở nến sau
-- lỗ ngày đạt 40 USD thì nghỉ mở lệnh mới 4 giờ, rồi được vào lại
+- lỗ ngày đạt 20 USD thì nghỉ mở lệnh mới 4 giờ, rồi được vào lại
 - sang ngày UTC mới thì được phép chạy lại
 - vòng khứ hồi có trừ phí
 - dữ liệu ghi SQLite không bị nhân đôi
@@ -60,7 +60,7 @@ Kỳ vọng của `sync`: một dòng kiểu `đã lưu ... nến 15m và ... đ
 - cắt lỗ 2%
 - dừng bot khi lỗ trong ngày đạt 3%
 - chốt lãi khi lãi ngày đạt 50 USD, rồi tính lại từ lúc chốt
-- lỗ ngày 40 USD thì nghỉ mở lệnh 4 giờ
+- lỗ ngày 20 USD thì nghỉ mở lệnh 4 giờ
 
 File dữ liệu nằm ở `data\trader.db`.
 
@@ -115,7 +115,7 @@ Muốn xem vòng sau, đợi nến 15 phút đóng rồi chạy `once` lại. Ho
 python -m local_trader run
 ```
 
-Dừng bằng `Ctrl+C`. Mỗi vòng paper chỉ hành động khi có nến 15 phút mới.
+Dừng bằng `Ctrl+C`. Mỗi vòng paper chỉ hành động khi có nến 15 phút mới. Cứ 15 phút, terminal in một log: số lệnh lãi/lỗ trong phiên, lãi lỗ lệnh đang mở, còn bao nhiêu USDT thì đủ target 50 hoặc chạm lỗ 20, và tổng tiền còn lại.
 
 Reset tài khoản giả lập, không xóa nến đã lưu:
 

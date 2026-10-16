@@ -108,7 +108,7 @@ def test_daily_loss_pauses_entries_for_four_hours():
         open_time = start + index * step
         candles.append(Candle(open_time, close, close + 0.1, close - 0.1, close, 1, open_time + step - 1))
     state = new_state(10_000, candles[0].close_time)
-    state.day_start_equity = 10_040
+    state.day_start_equity = 10_020
     assert process_bar(state, candles, 0.0001, **KW) == []
     assert state.position is None
     until = candles[-1].close_time + 4 * HOUR

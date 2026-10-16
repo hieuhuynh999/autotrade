@@ -10,6 +10,8 @@ from local_trader.day_guard import (
     entry_block_text,
     reset_day_guards,
     start_new_session,
+    LOSS_PAUSE_USD,
+    PROFIT_TARGET_USD,
 )
 from local_trader.engine import equity_at, process_bar, utc_day
 from local_trader.models import BotState, Candle, Fill, Position
@@ -105,6 +107,7 @@ def run_paper_once(settings: Settings, store: Store, now_ms: int) -> str:
                 reason=fill.reason,
                 momentum=fill.momentum,
                 equity=equity_at(state, fill.price),
+                pnl=fill.pnl if fill.kind == "exit" else None,
             )
         _record_guard_logs(store, messages, state.logs, "paper", settings.symbol, bar.close_time, equity_at(state, bar.close))
         if not fills and state.position is None and entries_allowed(state, bar.close_time):
@@ -314,6 +317,10 @@ def _close_demo(
     fill = float(order.get("avgPrice") or 0)
     if fill <= 0:
         fill = client.mark_price(settings.symbol)
+    if position.side == "long":
+        pnl = (fill - position.entry_price) * position.qty
+    else:
+        pnl = (position.entry_price - fill) * position.qty
     state.position = None
     store.add_event(
         ts=now_ms,
@@ -326,6 +333,7 @@ def _close_demo(
         reason=reason,
         momentum=None,
         equity=None,
+        pnl=pnl,
     )
     return fill
 
@@ -355,7 +363,7 @@ def _take_daily_profit(
         messages.append(f"chốt lãi ngày tại {fill_price:.4f}")
         equity = float(client.account()["totalMarginBalance"])
     if take_profit:
-        start_new_session(state, equity)
+        start_new_session(state, equity, now_ms)
     return equity
 
 
@@ -387,6 +395,7 @@ def _roll_demo_day(state: BotState, now_ms: int, equity: float) -> None:
         state.day_start_equity = equity
         state.halted = False
         state.halt_reason = None
+        state.session_started_ms = now_ms
         reset_day_guards(state)
 
 
@@ -476,6 +485,97 @@ def _fmt_time(time_ms: int) -> str:
     return datetime.fromtimestamp(time_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def format_session_log(
+    *,
+    now_ms: int,
+    equity: float,
+    day_pnl: float,
+    open_count: int,
+    open_text: str,
+    wins: int,
+    losses: int,
+    entries_blocked_until: int | None,
+    halted: bool,
+) -> str:
+    to_target = max(0.0, PROFIT_TARGET_USD - day_pnl)
+    to_loss = max(0.0, day_pnl + LOSS_PAUSE_USD)
+    lines = [
+        f"log 15 phút | {_fmt_time(now_ms)}",
+        f"lệnh đang mở {open_count} | {open_text}",
+        f"trong phiên: {wins} lệnh lãi, {losses} lệnh lỗ",
+        f"lãi/lỗ phiên {day_pnl:+.2f} USDT",
+        f"còn {to_target:.2f} USDT nữa thì đủ target ngày {PROFIT_TARGET_USD:.0f} USDT",
+        f"còn {to_loss:.2f} USDT nữa thì chạm lỗ ngày {LOSS_PAUSE_USD:.0f} USDT",
+        f"tổng tiền còn lại {equity:.2f} USDT",
+    ]
+    if halted:
+        lines.append("đang dừng mở lệnh vì lỗ 3% trong ngày UTC")
+    elif entries_blocked_until is not None and now_ms < entries_blocked_until:
+        lines.append(f"đang nghỉ mở lệnh, còn {_fmt_duration(entries_blocked_until - now_ms)}")
+    return "\n".join(lines)
+
+
+def session_log(
+    settings: Settings,
+    store: Store,
+    client: BinanceDemoClient | None,
+    now_ms: int,
+) -> str:
+    if settings.mode == "demo":
+        if client is None:
+            return "chưa có kết nối demo để in log 15 phút."
+        account = client.account()
+        equity = float(account["totalMarginBalance"])
+        state = store.load_demo_state(now_ms, equity)
+        position = _position_from_account(account, settings.symbol)
+        saved_stop, saved_entry, _ready = store.demo_extra()
+        if position is not None:
+            position = Position(
+                position.side,
+                position.qty,
+                position.entry_price,
+                saved_stop or position.stop_price,
+                saved_entry or position.entry_time,
+            )
+        mark = client.mark_price(settings.symbol) if position is not None else 0.0
+    else:
+        state = store.load_paper(settings.paper_cash, now_ms)
+        closed = closed_candles(store.candles(settings.symbol, settings.interval), now_ms)
+        mark = closed[-1].close if closed else 0.0
+        equity = equity_at(state, mark) if closed else state.cash
+        position = state.position
+    since = state.session_started_ms
+    wins, losses = store.session_exit_counts(settings.mode, settings.symbol, since)
+    if position is None:
+        open_count = 0
+        open_text = "không có lệnh, lãi/lỗ chưa chốt 0.00 USDT"
+    else:
+        if position.side == "long":
+            live = (mark - position.entry_price) * position.qty
+        else:
+            live = (position.entry_price - mark) * position.qty
+        open_count = 1
+        open_text = f"{position.side} {position.qty} lãi/lỗ chưa chốt {live:+.2f} USDT"
+    return format_session_log(
+        now_ms=now_ms,
+        equity=equity,
+        day_pnl=equity - state.day_start_equity,
+        open_count=open_count,
+        open_text=open_text,
+        wins=wins,
+        losses=losses,
+        entries_blocked_until=state.entries_blocked_until,
+        halted=state.halted,
+    )
+
+
+def _fmt_duration(duration_ms: int) -> str:
+    seconds = max(0, duration_ms // 1000)
+    hours, rest = divmod(seconds, 3600)
+    minutes, seconds = divmod(rest, 60)
+    return f"{hours} giờ {minutes} phút"
+
+
 def status_report(settings: Settings, store: Store, now_ms: int) -> str:
     candle_count, funding_count = store.counts(settings.symbol, settings.interval)
     lines = [
@@ -484,7 +584,7 @@ def status_report(settings: Settings, store: Store, now_ms: int) -> str:
         f"ngưỡng vào {settings.entry_threshold * 100:.2f}% / thoát {settings.exit_threshold * 100:.2f}%",
         "vào lệnh khi đóng cửa phá đỉnh hoặc phá đáy 24 nến 15 phút và funding không ngược chiều",
         f"khối lượng {settings.position_pct * 100:.1f}% vốn | cắt lỗ {settings.stop_pct * 100:.1f}% | lỗ ngày {settings.daily_loss_pct * 100:.1f}%",
-        "chốt lãi 50 USD thì tính ngày mới từ lúc đó | lỗ ngày 40 USD thì nghỉ mở lệnh 4 giờ",
+        "chốt lãi 50 USD thì tính ngày mới từ lúc đó | lỗ ngày 20 USD thì nghỉ mở lệnh 4 giờ",
     ]
     if settings.mode == "paper" and candle_count:
         state = store.load_paper(settings.paper_cash, now_ms)
