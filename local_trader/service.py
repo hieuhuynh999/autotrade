@@ -1,7 +1,7 @@
 import time
 from datetime import datetime, timezone
 
-from local_trader.binance_client import BinanceDemoClient, BinanceError
+from local_trader.okx_client import OkxDemoClient, OkxError
 from local_trader.config import Settings
 from local_trader.day_guard import (
     activity_label,
@@ -32,7 +32,7 @@ from local_trader.strategy import (
 )
 
 
-def sync_market(settings: Settings, store: Store, client: BinanceDemoClient, *, full: bool) -> str:
+def sync_market(settings: Settings, store: Store, client: OkxDemoClient, *, full: bool) -> str:
     if full:
         target = 2160 if settings.interval == "1h" else 90 * 24 * 4
         candles, funding = client.download_history(settings.symbol, settings.interval, candles_target=target)
@@ -134,9 +134,12 @@ def run_paper_once(settings: Settings, store: Store, now_ms: int) -> str:
     return "\n".join(messages)
 
 
-def run_demo_once(settings: Settings, store: Store, client: BinanceDemoClient, now_ms: int) -> str:
-    if not settings.api_key or not settings.api_secret:
-        raise BinanceError(None, "MODE=demo cần API key tạo tại https://demo.binance.com")
+def run_demo_once(settings: Settings, store: Store, client: OkxDemoClient, now_ms: int) -> str:
+    if not settings.api_key or not settings.api_secret or not settings.api_passphrase:
+        raise OkxError(
+            None,
+            "MODE=demo cần OKX_API_KEY, OKX_API_SECRET và OKX_API_PASSPHRASE tạo trong OKX Demo Trading",
+        )
     sync_market(settings, store, client, full=False)
     closed = closed_candles(store.candles(settings.symbol, settings.interval), now_ms)
     if len(closed) < settings.lookback + 1:
@@ -148,7 +151,7 @@ def run_demo_once(settings: Settings, store: Store, client: BinanceDemoClient, n
     equity = float(account["totalMarginBalance"])
     available = float(account["availableBalance"])
     if account.get("canWithdraw"):
-        print("cảnh báo: key đang bật quyền rút. Với demo thì tiền là tiền ảo, nhưng đừng dùng key sàn thật.")
+        print("cảnh báo: key đang bật quyền rút. Chỉ dùng API key tạo trong OKX Demo Trading.")
     position = _position_from_account(account, settings.symbol)
     state = store.load_demo_state(now_ms, equity)
     saved_stop, saved_entry, leverage_ready = store.demo_extra()
@@ -247,7 +250,7 @@ def run_demo_once(settings: Settings, store: Store, client: BinanceDemoClient, n
 def _open_demo(
     settings: Settings,
     store: Store,
-    client: BinanceDemoClient,
+    client: OkxDemoClient,
     state: BotState,
     filters,
     side: str,
@@ -267,9 +270,14 @@ def _open_demo(
     stop_side = "SELL" if side == "long" else "BUY"
     stop_note = f"cắt lỗ sàn đặt tại {format_step(trigger, filters.tick_size)}"
     try:
-        client.place_stop(settings.symbol, stop_side, format_step(trigger, filters.tick_size))
-    except BinanceError as exc:
-        stop_note = f"không đặt được STOP_MARKET trên sàn ({exc}). Bot vẫn cắt lỗ bằng mark price mỗi vòng."
+        client.place_stop(
+            settings.symbol,
+            stop_side,
+            format_step(trigger, filters.tick_size),
+            format_step(qty, filters.step_size),
+        )
+    except OkxError as exc:
+        stop_note = f"không đặt được lệnh cắt lỗ trên OKX ({exc}). Bot vẫn cắt lỗ bằng mark price mỗi vòng."
     store.add_event(
         ts=now_ms,
         mode="demo",
@@ -288,7 +296,7 @@ def _open_demo(
 def _close_demo(
     settings: Settings,
     store: Store,
-    client: BinanceDemoClient,
+    client: OkxDemoClient,
     state: BotState,
     filters,
     reason: str,
@@ -299,7 +307,7 @@ def _close_demo(
         raise RuntimeError("không có vị thế demo để đóng")
     try:
         client.cancel_stops(settings.symbol)
-    except BinanceError:
+    except OkxError:
         pass
     close_side = "SELL" if position.side == "long" else "BUY"
     try:
@@ -309,8 +317,8 @@ def _close_demo(
             format_step(position.qty, filters.step_size),
             reduce_only=True,
         )
-    except BinanceError as exc:
-        if exc.code not in {-2022, -4118}:
+    except OkxError as exc:
+        if str(exc.code) not in {"51169", "51112"}:
             raise
         state.position = None
         return client.mark_price(settings.symbol)
@@ -341,7 +349,7 @@ def _close_demo(
 def _take_daily_profit(
     settings: Settings,
     store: Store,
-    client: BinanceDemoClient,
+    client: OkxDemoClient,
     state: BotState,
     filters,
     equity: float,
@@ -404,9 +412,9 @@ def _position_from_account(account: dict, symbol: str) -> Position | None:
         if row.get("symbol") != symbol:
             continue
         if row.get("positionSide") not in (None, "BOTH"):
-            raise BinanceError(
+            raise OkxError(
                 None,
-                "tài khoản demo đang ở hedge mode. Hãy chuyển về One-way mode rồi chạy lại.",
+                "tài khoản OKX demo đang ở hedge mode. Hãy chuyển về net mode rồi chạy lại.",
             )
         qty = float(row.get("positionAmt") or 0)
         if qty == 0:
@@ -518,7 +526,7 @@ def format_session_log(
 def session_log(
     settings: Settings,
     store: Store,
-    client: BinanceDemoClient | None,
+    client: OkxDemoClient | None,
     now_ms: int,
 ) -> str:
     if settings.mode == "demo":

@@ -33,6 +33,7 @@ class Settings:
     db_path: Path
     api_key: str
     api_secret: str
+    api_passphrase: str = ""
 
 
 def _required_float(name: str, default: str) -> float:
@@ -112,6 +113,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         leverage=leverage,
         loop_seconds=loop_seconds,
         db_path=db_path,
-        api_key=os.environ.get("BINANCE_API_KEY", "").strip(),
-        api_secret=os.environ.get("BINANCE_API_SECRET", "").strip(),
+        api_key=os.environ.get("OKX_API_KEY", "").strip(),
+        api_secret=os.environ.get("OKX_API_SECRET", "").strip(),
+        api_passphrase=os.environ.get("OKX_API_PASSPHRASE", "").strip(),
     )

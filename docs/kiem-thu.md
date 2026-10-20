@@ -1,8 +1,8 @@
 # Kiểm thử local-trader
 
-Tool này kiểm tra luật phá đỉnh/đáy trên nến 15 phút sau phí. Nó không dự báo lãi. Phần lớn lệnh dưới đây chạy trên máy bạn. Chỉ mục demo mới gửi lệnh, và chỉ gửi lên Binance Futures Demo.
+Tool này kiểm tra luật phá đỉnh/đáy trên nến 15 phút sau phí. Nó không dự báo lãi. Phần lớn lệnh dưới đây chạy trên máy bạn. Chỉ mục demo mới gửi lệnh, và chỉ gửi lên OKX Demo Trading.
 
-Funding là phí của hợp đồng vĩnh cửu, nên sàn để test là Futures Demo, không phải Spot.
+Funding là phí của hợp đồng vĩnh cửu, nên sàn để test là OKX Demo Trading, hợp đồng BTC-USDT-SWAP, không phải Spot.
 
 ## 1. Cài
 
@@ -36,7 +36,7 @@ Kỳ vọng: dòng cuối là `25 passed`. Bộ này kiểm tra:
 - sang ngày UTC mới thì được phép chạy lại
 - vòng khứ hồi có trừ phí
 - dữ liệu ghi SQLite không bị nhân đôi
-- mọi URL ký đều là `demo-fapi.binance.com`, lệnh cắt lỗ đi vào `/fapi/v1/algoOrder`
+- mọi URL ký đều là `openapi.okx.com` và có header demo, lệnh cắt lỗ đi vào `/api/v5/trade/order-algo`
 - `LEVERAGE` khác 1 và `MODE` lạ bị từ chối
 
 Nếu một test fail, dừng lại. Chưa chạy lệnh demo.
@@ -125,20 +125,20 @@ python -m local_trader reset-paper
 
 Kỳ vọng: `đã reset paper. Vốn 10000.00 USDT. Không có vị thế.`
 
-## 7. Đặt lệnh trên Futures Demo
+## 7. Đặt lệnh trên OKX Demo Trading
 
 Chỉ làm bước này sau khi mục 2 đến mục 6 chạy đúng.
 
-1. Mở https://demo.binance.com và đăng nhập.
-2. Vào USD-M Futures. Chuyển position mode về **One-way** (không dùng Hedge).
-3. Tạo API key ngay trên trang demo. Bật quyền trade. Tắt quyền rút nếu trang demo có nút đó.
-4. Không tạo key ở binance.com. Key sàn thật dán vào đây vẫn không gọi được sàn thật, vì host bị khóa, nhưng không nên trộn key.
-5. Sửa `.env`:
+1. Mở https://www.okx.com và đăng nhập.
+2. Vào Trade, rồi Demo Trading. Chuyển position mode về **net** (không dùng hedge).
+3. Tạo API key trong mục Demo Trading API. Bật quyền trade. Không tạo key ở mục API của tài khoản thật.
+4. Sửa `.env`:
 
 ```text
 MODE=demo
-BINANCE_API_KEY=key_demo
-BINANCE_API_SECRET=secret_demo
+OKX_API_KEY=key_demo
+OKX_API_SECRET=secret_demo
+OKX_API_PASSPHRASE=passphrase_demo
 ```
 
 6. Chạy:
@@ -150,11 +150,11 @@ python -m local_trader once
 Kỳ vọng:
 
 - bot kéo nến mới, đặt đòn bẩy 1
-- nếu có tín hiệu: một lệnh MARKET, rồi một STOP_MARKET trên demo
+- nếu có tín hiệu: một lệnh market, rồi một lệnh conditional cắt lỗ trên demo
 - dòng trạng thái ghi `demo`, một vị thế, giá cắt lỗ
 - nếu không có tín hiệu: lý do bỏ qua, không có lệnh mới
 
-7. Mở https://demo.binance.com, mục Futures, kiểm tra:
+7. Mở OKX Demo Trading, mục hợp đồng vĩnh cửu, kiểm tra:
 
 - chỉ một vị thế BTCUSDT
 - đòn bẩy 1
@@ -163,7 +163,7 @@ Kỳ vọng:
 
 8. Chạy lại `python -m local_trader once` trong cùng giờ. Kỳ vọng có câu đã xử lý nến này, và số vị thế trên web không tăng.
 
-9. Để cắt lỗ được kiểm tra giữa giờ (theo mark price), chạy `python -m local_trader run`. Vòng mặc định 60 giây. Lệnh STOP_MARKET trên sàn vẫn còn tác dụng nếu bạn tắt máy.
+9. Để cắt lỗ được kiểm tra giữa giờ (theo mark price), chạy `python -m local_trader run`. Vòng mặc định 60 giây. Lệnh cắt lỗ trên OKX demo vẫn còn tác dụng nếu bạn tắt máy.
 
 Đưa `.env` về `MODE=paper` khi test xong nếu bạn chưa muốn bot tự đặt lệnh.
 
@@ -184,9 +184,9 @@ Kỳ vọng:
 | Hiện tượng | Việc làm |
 |---|---|
 | `chưa đủ nến đóng` | Chạy `python -m local_trader sync` |
-| `MODE=demo cần API key` | Điền key của demo.binance.com vào `.env` |
-| `invalid api-key` hoặc `-2015` | Key không phải key demo, hoặc chưa bật quyền trade |
-| `hedge mode` | Trên demo, đổi sang One-way mode |
+| `MODE=demo cần OKX_API_KEY` | Điền key tạo trong OKX Demo Trading vào `.env` |
+| `50111` hoặc API key không hợp lệ | Key không phải key demo, hoặc thiếu passphrase |
+| `hedge mode` | Trên OKX demo, đổi sang net mode |
 | `khối lượng nhỏ hơn mức tối thiểu` | Tăng `PAPER_CASH` hoặc `POSITION_PCT` trong `.env`, rồi `reset-paper` |
 | `LEVERAGE chỉ được bằng 1` | Giữ `LEVERAGE=1` |
 | Lỗi mạng lúc `run` | Bot in lỗi và thử lại vòng sau. `once` thì dừng để bạn thấy lỗi |
