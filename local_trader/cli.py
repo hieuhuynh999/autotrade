@@ -3,7 +3,7 @@ import sys
 import time
 from pathlib import Path
 
-from local_trader.binance_client import DEMO_BASE_URL, BinanceDemoClient, BinanceError
+from local_trader.okx_client import DEMO_BASE_URL, OkxDemoClient, OkxError
 from local_trader.config import load_settings
 import requests
 
@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(
         prog="local_trader",
-        description="Bot phá đỉnh/đáy 15 phút, lưu dữ liệu local, chỉ nối Binance Futures Demo.",
+        description="Bot phá đỉnh/đáy 15 phút, lưu dữ liệu local, chỉ nối OKX Demo Trading.",
     )
     parser.add_argument("--env", default=".env", help="đường dẫn file env")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cấu hình lỗi: {exc}")
         return 2
     store = Store(settings.db_path)
-    client = BinanceDemoClient(settings.api_key, settings.api_secret)
+    client = OkxDemoClient(settings.api_key, settings.api_secret, settings.api_passphrase)
     try:
         if args.command == "sync":
             print(sync_market(settings, store, client, full=True))
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
                         print(session_log(settings, store, client, now))
                         last_session_log = now
                     print("---")
-                except (BinanceError, requests.RequestException) as exc:
+                except (OkxError, requests.RequestException) as exc:
                     print(f"lỗi mạng hoặc sàn, sẽ thử lại: {exc}")
                 time.sleep(settings.loop_seconds)
         elif args.command == "status":
@@ -75,8 +75,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"đã reset paper. Vốn {state.cash:.2f} USDT. Không có vị thế.")
         else:
             parser.error(f"lệnh không rõ: {args.command}")
-    except BinanceError as exc:
-        print(f"lỗi Binance demo: {exc}")
+    except OkxError as exc:
+        print(f"lỗi OKX demo: {exc}")
         return 1
     except KeyboardInterrupt:
         print("đã dừng bot.")
@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _once(settings, store: Store, client: BinanceDemoClient) -> str:
+def _once(settings, store: Store, client: OkxDemoClient) -> str:
     now = _now()
     if settings.mode == "paper":
         return run_paper_once(settings, store, now)
